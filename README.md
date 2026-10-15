@@ -1,5 +1,7 @@
 # Linux Processes & Threads — Hands-on Lab
 
+For more visualisation you can visit https://brtkrclr.github.io/linux-lab/how-process-runs.html
+
 Learn how Linux really runs programs by writing small C programs and looking at them with `/proc`, `ps`, `strace` and `gdb`.
 Everything runs inside a disposable Ubuntu container, so it works the same on macOS, Windows and Linux and can't damage your machine's own setup.
 
