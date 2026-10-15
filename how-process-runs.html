@@ -1,0 +1,896 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Inside ./hello</title>
+<meta name="claude:viewport-fit-sides" content="cover">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@400;500;600&family=IBM+Plex+Sans+Condensed:wght@500;600&family=IBM+Plex+Sans:wght@400;500;600&display=swap">
+<style>
+/* Layout: left = your terminal + the story of the current step; right = the kernel's view (CPU, task_structs, address space, fd tables, strace log). */
+:root{
+  --bg:#eceff2; --panel:#ffffff; --panel-2:#f5f7f9; --line:#d3dae0; --ink:#14202a; --muted:#5a6a77;
+  --user:#2360c4; --kernel:#b0600c; --fault:#a83466;
+  --pipe:#6c42bf; --tty:#3c6b85; --reg:#2b8050;
+  --st-r:#2b8050; --st-s:#2360c4; --st-z:#bf3a2c; --st-x:#8793a0;
+  --seg-text:#2360c4; --seg-ro:#6b8dcc; --seg-data:#2b8050; --seg-heap:#b8760c; --seg-lib:#6c42bf; --seg-stack:#bb3767; --seg-vdso:#77838f;
+  --flash:rgba(176,96,12,.16);
+  --term-bg:#0b1015; --term-fg:#d3dce3; --term-green:#7acb88; --term-blue:#7aa7ff; --term-dim:#6b7986; --term-line:#1d262e;
+  --f-display:"IBM Plex Sans Condensed","Arial Narrow",system-ui,sans-serif;
+  --f-body:"IBM Plex Sans",system-ui,-apple-system,"Segoe UI",sans-serif;
+  --f-mono:"IBM Plex Mono",ui-monospace,SFMono-Regular,Menlo,Consolas,monospace;
+}
+@media (prefers-color-scheme: dark){:root:not([data-theme="light"]){
+  --bg:#0d1216; --panel:#141b21; --panel-2:#192229; --line:#26313a; --ink:#dce4ea; --muted:#8a99a5;
+  --user:#74a3ff; --kernel:#e49a42; --fault:#e46c9c;
+  --pipe:#a988ef; --tty:#70a8c6; --reg:#5cc184;
+  --st-r:#5cc184; --st-s:#74a3ff; --st-z:#f06a5a; --st-x:#6a7680;
+  --seg-text:#74a3ff; --seg-ro:#9cb7ec; --seg-data:#5cc184; --seg-heap:#e0a54a; --seg-lib:#a988ef; --seg-stack:#ec6e9b; --seg-vdso:#8d99a4;
+  --flash:rgba(228,154,66,.2);
+  color-scheme:dark;
+}}
+:root[data-theme="dark"]{
+  --bg:#0d1216; --panel:#141b21; --panel-2:#192229; --line:#26313a; --ink:#dce4ea; --muted:#8a99a5;
+  --user:#74a3ff; --kernel:#e49a42; --fault:#e46c9c;
+  --pipe:#a988ef; --tty:#70a8c6; --reg:#5cc184;
+  --st-r:#5cc184; --st-s:#74a3ff; --st-z:#f06a5a; --st-x:#6a7680;
+  --seg-text:#74a3ff; --seg-ro:#9cb7ec; --seg-data:#5cc184; --seg-heap:#e0a54a; --seg-lib:#a988ef; --seg-stack:#ec6e9b; --seg-vdso:#8d99a4;
+  --flash:rgba(228,154,66,.2);
+  color-scheme:dark;
+}
+*{box-sizing:border-box}
+body{background:var(--bg);color:var(--ink);font-family:var(--f-body);font-size:15px;line-height:1.5;
+  padding-left:max(16px,env(safe-area-inset-left,0px));padding-right:max(16px,env(safe-area-inset-right,0px));padding-block:18px 40px}
+code,.mono{font-family:var(--f-mono);font-size:.92em}
+h1,h2,h3{font-family:var(--f-display);font-weight:600;text-wrap:balance;margin:0}
+.wrap{max-width:1480px;margin:0 auto;display:flex;flex-direction:column;gap:16px}
+header.top{display:flex;flex-wrap:wrap;align-items:baseline;gap:6px 18px}
+header.top h1{font-size:1.75rem;letter-spacing:-.01em}
+header.top h1 span{font-family:var(--f-mono);font-weight:500;color:var(--kernel)}
+header.top p{margin:0;color:var(--muted);max-width:70ch}
+.legend{display:flex;flex-wrap:wrap;gap:6px 14px;font-size:.8rem;color:var(--muted)}
+.legend i{display:inline-block;width:9px;height:9px;border-radius:2px;margin-right:5px;vertical-align:baseline}
+
+.grid{display:grid;grid-template-columns:minmax(0,5fr) minmax(0,7fr);gap:18px;align-items:start}
+@media (max-width:980px){.grid{grid-template-columns:minmax(0,1fr)}}
+.left{display:flex;flex-direction:column;gap:14px;min-width:0}
+@media (min-width:981px){.left{position:sticky;top:max(12px,env(safe-area-inset-top,0px));max-height:calc(100vh - 24px);overflow:auto;padding-bottom:4px}}
+.right{display:flex;flex-direction:column;gap:14px;min-width:0}
+
+.panel{background:var(--panel);border:1px solid var(--line);border-radius:8px;min-width:0}
+.panel>.ph{display:flex;align-items:baseline;justify-content:space-between;gap:10px;padding:10px 14px 0}
+.ph h2{font-size:.78rem;text-transform:uppercase;letter-spacing:.08em;color:var(--muted);font-family:var(--f-body);font-weight:600}
+.ph .hint{font-size:.78rem;color:var(--muted)}
+.pb{padding:10px 14px 14px}
+
+/* terminal */
+.term{background:var(--term-bg);color:var(--term-fg);border-radius:8px;overflow:hidden;border:1px solid var(--term-line);box-shadow:0 8px 28px rgba(0,0,0,.18)}
+.term-bar{display:flex;align-items:center;gap:7px;padding:8px 12px;background:#141b22;border-bottom:1px solid var(--term-line)}
+.term-bar b{width:11px;height:11px;border-radius:50%;background:#3a444d;display:inline-block}
+.term-bar b:nth-child(1){background:#e0605a}.term-bar b:nth-child(2){background:#e3b341}.term-bar b:nth-child(3){background:#5fbf6a}
+.term-bar span{margin-left:8px;font-family:var(--f-mono);font-size:.76rem;color:var(--term-dim)}
+.term-body{font-family:var(--f-mono);font-size:.86rem;line-height:1.45;padding:12px 14px;height:300px;overflow:auto;cursor:text;white-space:pre-wrap;word-break:break-word}
+.term-body .p-u{color:var(--term-green);font-weight:600}.term-body .p-d{color:var(--term-blue);font-weight:600}
+.term-body .dim{color:var(--term-dim)}
+.term-body .out-new{animation:outflash 1.2s ease-out}
+@keyframes outflash{from{background:rgba(122,203,136,.25)}to{background:transparent}}
+.inline-in{display:inline;background:transparent;border:0;outline:0;color:var(--term-fg);font:inherit;caret-color:var(--term-green);padding:0;width:60%;min-width:8ch}
+.busy{color:var(--term-dim)}
+.busy::after{content:"▌";animation:blink 1s steps(1) infinite;color:var(--term-green)}
+@keyframes blink{50%{opacity:0}}
+.chips{display:flex;flex-wrap:wrap;gap:6px;padding:10px 12px;border-top:1px solid var(--term-line);background:#10161c}
+.chip{font-family:var(--f-mono);font-size:.8rem;background:#18212a;color:var(--term-fg);border:1px solid #2a3540;border-radius:5px;padding:4px 9px;cursor:pointer}
+.chip:hover{border-color:var(--term-green);color:var(--term-green)}
+.chip:focus-visible{outline:2px solid var(--term-green);outline-offset:1px}
+.chip:disabled{opacity:.4;cursor:not-allowed}
+
+/* controls */
+.controls{display:flex;flex-wrap:wrap;align-items:center;gap:8px;padding:10px 14px}
+.btn{font:500 .86rem var(--f-body);background:var(--panel-2);color:var(--ink);border:1px solid var(--line);border-radius:6px;padding:6px 12px;cursor:pointer}
+.btn:hover:not(:disabled){border-color:var(--kernel)}
+.btn:focus-visible,select:focus-visible{outline:2px solid var(--kernel);outline-offset:1px}
+.btn:disabled{opacity:.4;cursor:not-allowed}
+.btn.primary{background:var(--kernel);border-color:var(--kernel);color:#fff}
+.btn.primary:disabled{background:var(--panel-2);color:var(--ink);border-color:var(--line)}
+select{font:inherit;font-size:.84rem;background:var(--panel-2);color:var(--ink);border:1px solid var(--line);border-radius:6px;padding:5px 6px}
+.stepno{margin-left:auto;font-family:var(--f-mono);font-size:.8rem;color:var(--muted);font-variant-numeric:tabular-nums}
+.progress{height:3px;background:var(--line);margin:0 14px 10px;border-radius:2px;overflow:hidden}
+.progress div{height:100%;background:var(--kernel);width:0;transition:width .3s}
+.keys{font-size:.76rem;color:var(--muted);padding:0 14px 10px}
+kbd{font-family:var(--f-mono);font-size:.74rem;border:1px solid var(--line);border-bottom-width:2px;border-radius:4px;padding:0 5px;background:var(--panel-2)}
+
+/* explanation */
+.explain .eyebrow{display:flex;flex-wrap:wrap;gap:6px;align-items:center;font-size:.74rem;text-transform:uppercase;letter-spacing:.08em;color:var(--muted);font-weight:600}
+.explain h3{font-size:1.35rem;margin:6px 0 8px;line-height:1.2}
+.explain .call{font-family:var(--f-mono);font-size:.8rem;background:var(--panel-2);border:1px solid var(--line);border-radius:6px;padding:8px 10px;overflow-x:auto;white-space:pre;margin-bottom:10px}
+.explain p{margin:0 0 10px;max-width:68ch}
+.explain p code{background:var(--panel-2);border:1px solid var(--line);border-radius:4px;padding:0 4px}
+.explain .kpath{font-family:var(--f-mono);font-size:.76rem;color:var(--muted);border-top:1px dashed var(--line);padding-top:8px;margin-top:4px;overflow-x:auto}
+.explain .kpath b{color:var(--kernel);font-weight:600;font-family:var(--f-body);text-transform:uppercase;letter-spacing:.06em;font-size:.7rem;margin-right:6px}
+header.top .note{flex-basis:100%;font-size:.82rem;border:1px dashed var(--line);border-radius:6px;padding:7px 10px;max-width:none}
+header.top .note b{color:var(--ink)}
+.facts{display:flex;flex-direction:column;gap:6px;font-size:.84rem;margin:2px 0 10px;max-width:68ch}
+.facts div{border-left:3px solid var(--line);padding-left:9px}
+.facts b{display:block;font-size:.68rem;text-transform:uppercase;letter-spacing:.08em}
+.facts b.g{color:var(--st-r)}.facts b.v{color:var(--kernel)}
+.hex{font-family:var(--f-mono);font-size:.76rem;background:var(--panel-2);border:1px solid var(--line);border-radius:6px;padding:8px 10px;overflow-x:auto;white-space:pre;margin:0 0 10px}
+.hex em{font-style:normal;color:var(--kernel);font-weight:600}
+.tag{display:inline-block;font-family:var(--f-mono);font-size:.7rem;font-weight:600;letter-spacing:.04em;border-radius:4px;padding:1px 6px;border:1px solid currentColor;text-transform:none}
+.tag.user{color:var(--user)}.tag.kernel{color:var(--kernel)}.tag.fault{color:var(--fault)}
+
+/* cpu strip */
+.cpu{display:grid;grid-template-columns:auto 1fr;gap:12px;align-items:stretch;padding:12px 14px}
+.rings{display:flex;flex-direction:column;gap:4px;font-family:var(--f-mono);font-size:.72rem;min-width:150px}
+.ring{border:1px solid var(--line);border-radius:5px;padding:5px 8px;color:var(--muted);transition:all .25s}
+.ring.on.u{border-color:var(--user);color:var(--user);background:color-mix(in srgb,var(--user) 10%,transparent);font-weight:600}
+.ring.on.k{border-color:var(--kernel);color:var(--kernel);background:color-mix(in srgb,var(--kernel) 10%,transparent);font-weight:600}
+.ring.on.f{border-color:var(--fault);color:var(--fault);background:color-mix(in srgb,var(--fault) 10%,transparent);font-weight:600}
+.cpu-now{min-width:0;display:flex;flex-direction:column;gap:3px;justify-content:center}
+.cpu-now .who{font-size:.8rem;color:var(--muted)}
+.cpu-now .who b{color:var(--ink);font-family:var(--f-mono)}
+.cpu-now .what{font-family:var(--f-mono);font-size:.84rem;overflow-x:auto;white-space:nowrap}
+.cpu-now .nr{font-family:var(--f-mono);font-size:.74rem;color:var(--muted)}
+@media (max-width:520px){.cpu{grid-template-columns:1fr}.rings{flex-direction:row;min-width:0}.ring{flex:1}}
+
+/* processes */
+.procs{display:grid;grid-template-columns:repeat(auto-fill,minmax(190px,1fr));gap:10px}
+.proc{border:1px solid var(--line);border-radius:7px;padding:10px 11px;background:var(--panel-2);cursor:pointer;text-align:left;font:inherit;color:inherit;display:flex;flex-direction:column;gap:5px;transition:border-color .2s,opacity .3s}
+.proc:focus-visible{outline:2px solid var(--kernel);outline-offset:1px}
+.proc.focus{border-color:var(--ink)}
+.proc.active{box-shadow:0 0 0 2px var(--kernel) inset}
+.proc.dead{opacity:.55}
+.proc .row1{display:flex;justify-content:space-between;align-items:center;gap:8px}
+.proc .comm{font-family:var(--f-mono);font-weight:600;font-size:1.05rem}
+.proc .ids{font-family:var(--f-mono);font-size:.74rem;color:var(--muted);font-variant-numeric:tabular-nums;display:grid;grid-template-columns:auto 1fr;gap:0 8px}
+.proc .wchan{font-size:.75rem;color:var(--muted);min-height:1.1em}
+.st{font-family:var(--f-mono);font-size:.7rem;font-weight:600;padding:1px 7px;border-radius:10px;color:#fff;white-space:nowrap}
+.st.R{background:var(--st-r)}.st.S{background:var(--st-s)}.st.Z{background:var(--st-z)}.st.X{background:var(--st-x)}
+.flash{animation:flash 1.6s ease-out}
+@keyframes flash{0%{background:var(--flash);box-shadow:0 0 0 2px var(--kernel)}100%{box-shadow:0 0 0 0 transparent}}
+.enter{animation:enter .45s ease-out}
+@keyframes enter{from{transform:translateY(6px);opacity:.2}to{transform:none;opacity:1}}
+
+.two{display:grid;grid-template-columns:minmax(0,1fr) minmax(0,1fr);gap:14px}
+@media (max-width:720px){.two{grid-template-columns:minmax(0,1fr)}}
+
+/* address space */
+.tabs{display:flex;flex-wrap:wrap;gap:5px;margin-bottom:8px}
+.tab{font-family:var(--f-mono);font-size:.74rem;border:1px solid var(--line);background:var(--panel-2);color:var(--muted);border-radius:5px;padding:2px 8px;cursor:pointer}
+.tab.on{color:var(--ink);border-color:var(--ink);font-weight:600}
+.tab:focus-visible{outline:2px solid var(--kernel)}
+.as{display:flex;flex-direction:column;gap:3px;font-family:var(--f-mono);font-size:.74rem}
+.as .band{border:1px dashed var(--line);border-radius:5px;padding:5px 8px;color:var(--muted);text-align:center;font-size:.7rem}
+.as .gap{color:var(--muted);text-align:center;font-size:.68rem;padding:1px 0;letter-spacing:.06em}
+.seg{display:grid;grid-template-columns:6px minmax(0,auto) auto minmax(0,1fr);gap:0 8px;align-items:center;border:1px solid var(--line);border-radius:5px;padding:5px 8px 5px 0;background:var(--panel-2);overflow:hidden}
+.seg .bar{align-self:stretch;margin:-5px 0}
+.seg .addr{color:var(--muted);font-variant-numeric:tabular-nums}
+.seg .perm{font-weight:600}
+.seg .nm{overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.seg .badge{grid-column:2 / -1;font-size:.68rem;margin-top:2px}
+.seg.cow{background:repeating-linear-gradient(135deg,var(--panel-2) 0 6px,color-mix(in srgb,var(--kernel) 9%,var(--panel-2)) 6px 12px)}
+.seg .badge.cow{color:var(--kernel)}.seg .badge.copied{color:var(--fault)}
+.empty{color:var(--muted);font-size:.84rem;padding:14px;border:1px dashed var(--line);border-radius:6px;text-align:center}
+.k-text{background:var(--seg-text)}.k-ro{background:var(--seg-ro)}.k-data{background:var(--seg-data)}.k-heap{background:var(--seg-heap)}.k-lib{background:var(--seg-lib)}.k-stack{background:var(--seg-stack)}.k-vdso{background:var(--seg-vdso)}
+
+/* fds */
+.fdt{display:flex;flex-direction:column;gap:10px}
+.fdproc h4{margin:0 0 4px;font-family:var(--f-mono);font-size:.78rem;font-weight:600}
+.fdproc h4 span{color:var(--muted);font-weight:400}
+.fdrows{display:flex;flex-direction:column;gap:2px}
+.fdrow{display:grid;grid-template-columns:3.2em 1.2em minmax(0,1fr);align-items:center;font-family:var(--f-mono);font-size:.76rem;padding:2px 6px;border-radius:4px}
+.fdrow .n{font-weight:600;font-variant-numeric:tabular-nums}
+.fdrow .arr{color:var(--muted)}
+.obj{display:inline-flex;align-items:center;gap:6px;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.dot{width:8px;height:8px;border-radius:2px;flex:none}
+.c-tty{background:var(--tty)}.c-pipe-r,.c-pipe-w{background:var(--pipe)}.c-reg{background:var(--reg)}
+.cx{font-size:.66rem;color:var(--kernel);border:1px solid currentColor;border-radius:3px;padding:0 3px;margin-left:4px}
+.ofile{display:flex;flex-direction:column;gap:5px;margin-top:12px;border-top:1px dashed var(--line);padding-top:10px}
+.ofile h4{margin:0;font-size:.72rem;text-transform:uppercase;letter-spacing:.08em;color:var(--muted)}
+.of{display:grid;grid-template-columns:minmax(0,1fr) auto;gap:6px;align-items:center;font-family:var(--f-mono);font-size:.76rem;border:1px solid var(--line);border-radius:5px;padding:5px 8px;background:var(--panel-2)}
+.of .refs{font-variant-numeric:tabular-nums;color:var(--muted)}
+.of .refs b{color:var(--ink)}
+.pipebox{border:1px solid var(--pipe);border-radius:6px;padding:8px;margin-top:6px}
+.pipebox .lbl{font-family:var(--f-mono);font-size:.72rem;color:var(--pipe);font-weight:600;display:flex;justify-content:space-between;gap:8px;flex-wrap:wrap}
+.ringbuf{display:grid;grid-template-columns:repeat(16,minmax(0,1fr));gap:2px;margin-top:6px}
+.ringbuf div{height:22px;border:1px solid var(--line);border-radius:2px;background:var(--panel-2)}
+.ringbuf div.full{background:color-mix(in srgb,var(--pipe) 30%,var(--panel-2));border-color:var(--pipe)}
+.pipebytes{font-family:var(--f-mono);font-size:.74rem;margin-top:5px;color:var(--muted);min-height:1.2em}
+.pipebytes span{display:inline-block;border:1px solid var(--pipe);color:var(--ink);border-radius:3px;padding:0 4px;margin-right:2px}
+
+/* strace log */
+.log{font-family:var(--f-mono);font-size:.74rem;max-height:240px;overflow:auto;display:flex;flex-direction:column}
+.log button{all:unset;cursor:pointer;padding:2px 6px;border-radius:3px;white-space:pre;color:var(--muted)}
+.log button:hover{background:var(--panel-2)}
+.log button:focus-visible{outline:2px solid var(--kernel)}
+.log button.cur{color:var(--ink);background:var(--flash)}
+.log button.ft{font-style:italic}
+.log .pid{color:var(--kernel)}
+.log-wrap{overflow-x:auto}
+@media (prefers-reduced-motion:reduce){*{animation:none!important;transition:none!important}}
+</style>
+</head>
+<body>
+
+<div class="wrap">
+  <header class="top">
+    <h1>Inside <span>./hello</span></h1>
+    <p>Run a command in the terminal, then step through every fork, clone, execve, page fault, write and wait the kernel performs to make it happen.</p>
+    <p class="note"><b>Representative example, not a recording.</b> Traces model Linux x86-64 with glibc and bash 5.2. PIDs, addresses, syscall flags and order, buffer sizes, timings and kernel function names are illustrative and vary with kernel version, libc, compiler, architecture and environment. Each step marks what is guaranteed and what varies. Run <code>strace -f</code> in your own container to see a real trace.</p>
+  </header>
+
+  <div class="grid">
+    <section class="left" aria-label="Terminal and explanation">
+      <div class="term">
+        <div class="term-bar"><b></b><b></b><b></b><span>berat@proclab: /lab/01-process-basics — bash</span></div>
+        <div class="term-body" id="term" aria-live="polite"></div>
+        <div class="chips" id="chips">
+          <button class="chip" data-cmd="./hello">./hello</button>
+          <button class="chip" data-cmd="./hello | wc">./hello | wc</button>
+          <button class="chip" data-cmd="./hello > out.txt">./hello &gt; out.txt</button>
+          <button class="chip" data-cmd="cat out.txt">cat out.txt</button>
+          <button class="chip" data-cmd="cat hello.c">cat hello.c</button>
+        </div>
+      </div>
+
+      <div class="panel">
+        <div class="controls">
+          <button class="btn" id="prev" title="Previous step (←)">◀ Prev</button>
+          <button class="btn primary" id="next" title="Next step (→)">Next ▶</button>
+          <button class="btn" id="play" title="Auto-advance (space)">Play</button>
+          <label class="mono" style="font-size:.8rem;color:var(--muted)" for="speed">pace</label>
+          <select id="speed"><option value="9000">slow</option><option value="5500" selected>normal</option><option value="2500">fast</option></select>
+          <button class="btn" id="skip" title="Jump to the last step">Skip to end</button>
+          <span class="stepno" id="stepno">idle</span>
+        </div>
+        <div class="progress"><div id="bar"></div></div>
+        <div class="keys"><kbd>→</kbd> next · <kbd>←</kbd> back · <kbd>space</kbd> play/pause · click any strace line to jump</div>
+      </div>
+
+      <article class="panel explain"><div class="pb" id="explain"></div></article>
+    </section>
+
+    <section class="right" aria-label="Kernel view">
+      <div class="panel">
+        <div class="ph"><h2>CPU 0</h2><span class="hint">who is running, and in which privilege mode</span></div>
+        <div class="cpu">
+          <div class="rings">
+            <div class="ring" id="ring-u">ring 3 · user mode</div>
+            <div class="ring" id="ring-k">ring 0 · kernel mode</div>
+          </div>
+          <div class="cpu-now">
+            <div class="who" id="cpu-who"></div>
+            <div class="what" id="cpu-what"></div>
+            <div class="nr" id="cpu-nr"></div>
+          </div>
+        </div>
+      </div>
+
+      <div class="panel">
+        <div class="ph"><h2>Process table · task_struct</h2><span class="hint">click a process to inspect its memory</span></div>
+        <div class="pb"><div class="procs" id="procs"></div></div>
+      </div>
+
+      <div class="two">
+        <div class="panel">
+          <div class="ph"><h2>Virtual address space</h2><span class="hint">/proc/PID/maps, not to scale</span></div>
+          <div class="pb"><div class="tabs" id="mmtabs"></div><div id="mm"></div>
+            <div class="legend" style="margin-top:10px">
+              <span><i class="k-text"></i>code</span><span><i class="k-ro"></i>read-only data</span><span><i class="k-data"></i>data/bss</span><span><i class="k-heap"></i>heap</span><span><i class="k-lib"></i>shared libs</span><span><i class="k-stack"></i>stack</span><span><i class="k-vdso"></i>vdso</span>
+            </div>
+          </div>
+        </div>
+        <div class="panel">
+          <div class="ph"><h2>File descriptors</h2><span class="hint">per-process table → kernel open files</span></div>
+          <div class="pb" id="fds"></div>
+        </div>
+      </div>
+
+      <div class="panel">
+        <div class="ph"><h2>strace -f</h2><span class="hint">representative trace, not a recorded run</span></div>
+        <div class="pb log-wrap"><div class="log" id="log"></div></div>
+      </div>
+    </section>
+  </div>
+</div>
+
+<script>
+(() => {
+const BASH = 4120, A = 4187, B = 4188;
+const PROMPT = '<span class="p-u">berat@proclab</span>:<span class="p-d">/lab/01-process-basics</span>$ ';
+const esc = s => String(s).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;');
+const clone = o => JSON.parse(JSON.stringify(o));
+const CLONE = 'clone(child_stack=NULL, flags=CLONE_CHILD_CLEARTID|CLONE_CHILD_SETTID|SIGCHLD, child_tidptr=0x7f3c8e1fda10)';
+const ENV = '0x7ffd3a1ffa58 /* 23 vars */';
+
+/* ---------- address-space builders ---------- */
+const seg = (a, p, n, k) => ({a, p, n, k});
+const bashMM = () => [
+  seg('7ffd3a1e0000','rw-p','[stack]','stack'),
+  seg('7ffd3a3f2000','r-xp','[vdso]','vdso'),
+  seg('7f3c8e5a6000','r-xp','ld-linux-x86-64.so.2','lib'),
+  seg('7f3c8e4f0000','r-xp','libtinfo.so.6','lib'),
+  seg('7f3c8e200000','r-xp','libc.so.6','lib'),
+  seg('55d1c4a0e000','rw-p','[heap]','heap'),
+  seg('55d1c39f2000','rw-p','bash .data .bss','data'),
+  seg('55d1c38c4000','r-xp','bash .text','text'),
+];
+function helloMM(stage){
+  const m = [seg('7ffe8c2a1000','rw-p','[stack]  argv envp auxv','stack'), seg('7ffe8c3d6000','r-xp','[vdso]','vdso'), seg('7f9b1e5c7000','r-xp','ld-linux-x86-64.so.2','lib')];
+  if (stage >= 1) m.push(seg('7f9b1e200000','r-xp','libc.so.6','lib'));
+  if (stage >= 2) m.push(seg('5600a8f1c000','rw-p','[heap]  stdout buffer','heap'));
+  m.push(seg('5600a7d4e000','rw-p','hello .data .bss','data'), seg('5600a7d4d000','r--p','hello .rodata  "hello\\n"','ro'), seg('5600a7d4c000','r-xp','hello .text  main()','text'));
+  return m;
+}
+const wcMM = () => [
+  seg('7ffc51e02000','rw-p','[stack]  argv envp auxv','stack'), seg('7ffc51f4b000','r-xp','[vdso]','vdso'),
+  seg('7f2a6d9c1000','r-xp','ld-linux-x86-64.so.2','lib'), seg('7f2a6d600000','r-xp','libc.so.6','lib'),
+  seg('55e0f4b6a000','rw-p','[heap]','heap'), seg('55e0f3a27000','rw-p','wc .data .bss','data'),
+  seg('55e0f3a1f000','r--p','wc .rodata','ro'), seg('55e0f3a12000','r-xp','wc .text','text'),
+];
+
+/* ---------- kernel state ---------- */
+function initState(){
+  return {
+    procs:[{pid:BASH,ppid:4119,pgid:BASH,comm:'bash',state:'S',wchan:'n_tty_read · waiting for your keystrokes',mm:bashMM(),mmOf:null,
+      fds:{0:{f:'tty'},1:{f:'tty'},2:{f:'tty'},255:{f:'tty',cx:true}}}],
+    files:{tty:{kind:'tty',label:'/dev/pts/0',sub:'terminal (pty slave)'}},
+    pipe:null
+  };
+}
+const P = (s,pid) => s.procs.find(p => p.pid === pid);
+const live = p => p.state !== 'Z' && p.state !== 'X';
+function setSt(s,pid,st,w){const p=P(s,pid);p.state=st;p.wchan=w||'';}
+function fork(s,par,ch){
+  const p=P(s,par), c=clone(p);
+  Object.assign(c,{pid:ch,ppid:par,state:'R',wchan:'',mmOf:par});
+  [p,c].forEach(x=>x.mm.forEach(g=>{if(g.p.includes('w')){g.cow=true;delete g.copied;}}));
+  s.procs.push(c);
+}
+function exec(s,pid,comm,mm){
+  const p=P(s,pid); p.comm=comm; p.mm=mm; p.mmOf=null;
+  for (const fd in p.fds) if (p.fds[fd].cx) delete p.fds[fd];
+  const par=P(s,BASH);
+  if (!s.procs.some(q=>q.mmOf===BASH && live(q))) par.mm.forEach(g=>{delete g.cow;});
+}
+function dup2(s,pid,o,n){const p=P(s,pid);p.fds[n]={f:p.fds[o].f};}
+function close(s,pid,...fds){const p=P(s,pid);fds.forEach(fd=>delete p.fds[fd]);}
+function die(s,pid){const p=P(s,pid);p.state='Z';p.wchan='exit code 0 kept for parent';p.mm=[];p.fds={};p.mmOf=null;
+  const par=P(s,BASH); if(!s.procs.some(q=>q.mmOf===BASH && live(q))) par.mm.forEach(g=>{delete g.cow;});}
+function reap(s,pid){const p=P(s,pid);p.state='X';p.wchan='reaped · task_struct freed, PID released';}
+function refs(s,fid){let n=0;s.procs.forEach(p=>{if(!live(p))return;for(const fd in p.fds)if(p.fds[fd].f===fid)n++;});return n;}
+
+/* ---------- shared step fragments ---------- */
+const HEX = `<div class="hex">$ xxd -l 32 hello
+00000000: <em>7f45 4c46</em> 0201 0100 0000 0000 0000 0000  <em>.ELF</em>............
+00000010: <em>0300</em> <em>3e00</em> 0100 0000 6010 0000 0000 0000  ..&gt;.....\`.......
+          ^e_type=3 ET_DYN  ^e_machine=0x3e x86-64   ^e_entry</div>`;
+
+function stepFork(child, extra){
+  return {pid:BASH, mode:'k', nr:'syscall 56 · clone', call:[`${CLONE} = ${child}`],
+    title:'fork(): bash clones itself',
+    body:`<p>glibc's <code>fork()</code> is a thin wrapper around the <code>clone</code> syscall. Its flags decide what the child shares with the parent. Without <code>CLONE_VM</code>, <code>CLONE_FILES</code> or <code>CLONE_SIGHAND</code> the child gets its own address space, its own descriptor table and its own signal-handler table, and that is what makes it a separate process. It is not a copy of <em>everything</em>: the entries in its new descriptor table still refer to the same open file descriptions as the parent's (so file offsets and status flags are shared), and it stays in the same namespaces, session and process group until something changes them. <code>pthread_create</code> calls clone with those flags set, and the result is a thread that shares them instead.</p>
+<p>The kernel allocates a new <code>task_struct</code> and kernel stack, assigns PID ${child}, and copies credentials, working directory, signal handlers and limits. Memory is not copied byte by byte: <code>dup_mmap</code> copies the list of memory areas and, for <b>private writable</b> mappings (heap, stack, .data, other MAP_PRIVATE areas), write-protects the pages already present in both processes, so they share the same physical pages until one side writes. That is copy-on-write (the hatched rows). Shared mappings (MAP_SHARED) stay genuinely shared, read-only pages need no change, and pages never touched have nothing to share. Because mostly page tables and bookkeeping are copied, forking a small process is cheap, typically well under a millisecond. The cost grows with the size of the address space and varies by system and load.</p>
+<p>The child gets its own copy of the descriptor table, but each entry points at the <em>same</em> open file description (struct file), so reference counts go up. ${extra||'The terminal is now held by 8 descriptors across two processes.'}</p>`,
+    std:["fork() creates a child with a new PID. It returns 0 in the child and the child's PID in the parent. The child gets a copy of the address space and its own descriptor table whose entries refer to the same open file descriptions.","Whether glibc uses clone or clone3 and which flags, what is copied eagerly vs on demand, and how long it takes."], kpath:'kernel_clone → copy_process → dup_task_struct · copy_creds · copy_files(dup_fd) · copy_sighand · copy_mm → dup_mmap (PTEs write-protected) · alloc_pid → wake_up_new_task',
+    apply:s=>{fork(s,BASH,child); P(s,child).pgid=A;}};
+}
+function stepParse(kind){
+  const map={
+    hello:`<p>Your keystrokes went from the terminal emulator through the pseudo-terminal to bash, which was asleep in <code>read()</code> on fd 0. Enter completes the line, readline hands it to bash, and bash parses it: one word, no pipe, no redirection.</p>
+<p>The word contains a slash, so bash skips the builtin, function and <code>$PATH</code> lookups and treats <code>./hello</code> as a path relative to the current directory.</p>
+<p>bash can't simply become hello. If it called <code>execve</code> itself, your shell would be replaced and gone. So it first makes a copy of itself, and lets the copy turn into hello.</p>`,
+    pipe:`<p>bash parses three tokens: <code>./hello</code>, <code>|</code>, <code>wc</code>. Two commands joined by a pipe means two processes running <em>at the same time</em>, with hello's stdout wired to wc's stdin.</p>
+<p><code>wc</code> has no slash, so bash checks builtins and functions, then tries each <code>$PATH</code> directory in order until a stat succeeds. It caches the hit (type <code>hash</code> to see the table). The lookup happens in the parent, before any fork.</p>`,
+    redir:`<p>bash parses a command plus a redirection: <code>&gt; out.txt</code>. Redirections are not part of the program's arguments; hello never sees them. bash will apply them in the child, between fork and execve, so they change only the child's descriptors and never the shell's own.</p>`
+  };
+  return {pid:BASH, mode:kind==='pipe'?'k':'u', nr:kind==='pipe'?'syscall 262 · newfstatat (PATH search)':'user space · readline / parser',
+    call: kind==='pipe' ? ['newfstatat(AT_FDCWD, "/usr/local/sbin/wc", 0x7ffd3a1ff6e0, 0) = -1 ENOENT','newfstatat(AT_FDCWD, "/usr/local/bin/wc", 0x7ffd3a1ff6e0, 0) = -1 ENOENT','newfstatat(AT_FDCWD, "/usr/sbin/wc", 0x7ffd3a1ff6e0, 0) = -1 ENOENT','newfstatat(AT_FDCWD, "/usr/bin/wc", {st_mode=S_IFREG|0755, st_size=48224, ...}, 0) = 0'] : ['read(0, "\\r", 1) = 1'],
+    title: kind==='pipe' ? 'bash parses a pipeline and finds wc' : 'bash reads and parses your line',
+    body: map[kind],
+    kpath: kind==='pipe' ? 'execute_pipeline → search_for_command → find_user_command_in_path → stat() per $PATH entry' : 'pty → n_tty line discipline → read(0) returns → readline → parse_command → execute_disk_command',
+    apply:s=>setSt(s,BASH,'R')};
+}
+function stepWait(extraCalls){
+  return {pid:BASH, mode:'k', nr:'syscall 61 · wait4', call:[...(extraCalls||[]),'wait4(-1,  <unfinished ...>'],
+    title:'bash goes to sleep in wait4()',
+    body:`<p>${extraCalls?'bash closes its own read end too, because it takes no part in the data flow. The only holders left are hello\'s fd 1 (write end) and wc\'s fd 0 (read end). ':''}The shell has nothing to do until the job finishes, so it calls <code>wait4()</code>. With <code>-1</code> it waits for <em>any</em> child, and one call returns one child, so for a pipeline bash records every PID in the job and keeps waiting until all of them are reaped. The exact pattern (blocking wait, SIGCHLD handler, waitpid vs wait4) varies between shells and versions. No child has exited yet, so the kernel puts bash on its wait queue and marks it <code>TASK_INTERRUPTIBLE</code>, shown as <b>S</b> in <code>ps</code>.</p>
+<p>A sleeping process uses no CPU at all: it is off the run queue. The scheduler only considers it again when something wakes it, here a child's exit.</p>`,
+    std:["A process blocked waiting for a child uses no CPU until a child changes state.","wait4 vs waitpid or waitid, and how a shell tracks every member of a pipeline."], kpath:'kernel_wait4 → do_wait → (no zombie found) → set_current_state(TASK_INTERRUPTIBLE) → schedule()',
+    apply:s=>{ if(extraCalls) close(s,BASH,3); setSt(s,BASH,'S','do_wait · waiting for a child'); }};
+}
+function stepExecFull(pid){
+  return [
+  {pid, mode:'k', nr:'syscall 59 · execve', call:[`execve("./hello", ["./hello"], ${ENV}) = 0`],
+    title:'execve(): open and inspect the new program',
+    body:`<p><code>execve</code> keeps the <em>process</em> and replaces the <em>program</em> inside it. The kernel resolves <code>./hello</code> against the child's working directory, checks the execute permission bit, and reads the first bytes of the file.</p>
+${HEX}
+<p>The magic <code>7f 45 4c 46</code> is <code>\\x7fELF</code>. The header says 64-bit x86-64, type <code>ET_DYN</code>. ET_DYN alone does not mean executable: shared libraries are ET_DYN too. What marks this file as a PIE executable is the combination: it also has a <code>PT_INTERP</code> program header (<code>/lib64/ld-linux-x86-64.so.2</code>) and an entry point, so the kernel loads it at a randomized base and maps that interpreter. A non-PIE build would be <code>ET_EXEC</code> at a fixed address; a static build would have no PT_INTERP.</p>
+<p>Up to here execve can still fail. If it did, it would return an error to the bash code in the child, which prints <code>No such file or directory</code> and exits with 127.</p>`,
+    std:["On success execve does not return. The PID stays the same, descriptors without close-on-exec stay open, and caught signals are reset to their default action.","Binary type (PIE, non-PIE, static, script), interpreter path, and the exact checks and kernel function names."], kpath:'do_execveat_common → bprm_execve → do_open_execat → may_open(MAY_EXEC) → exec_binprm → search_binary_handler → load_elf_binary (parse ELF + program headers)',
+    apply:s=>{}},
+  {pid, mode:'k', nr:'syscall 59 · execve (continued)', call:['    (begin_new_exec: point of no return)'], logSkip:true,
+    title:'Old address space out, new one in',
+    body:`<p><code>begin_new_exec</code> is the point of no return. The kernel drops the child's old memory. Every COW page it shared with bash loses a reference, so bash owns those pages alone again and can write them without copying (the hatching disappears from bash).</p>
+<p>A fresh address space is built. hello's <code>PT_LOAD</code> segments are mapped: code <code>r-x</code>, constants <code>r--</code>, data and bss <code>rw-</code>. Nothing is read from disk yet; the mappings only point at the file. ld-linux is mapped too, and the vDSO, a tiny library the kernel provides so calls like <code>clock_gettime</code> can skip the syscall. At the top, a new stack gets <code>argc</code>, <code>argv</code>, <code>envp</code> and the auxiliary vector (<code>AT_ENTRY</code>, <code>AT_PHDR</code>, <code>AT_RANDOM</code>…).</p>
+<p>Some things survive: PID ${pid}, the parent, the process group, the working directory, and open descriptors. fd 255 was opened by bash with <code>O_CLOEXEC</code>, so it is closed now. 0, 1 and 2 still point at the terminal. The name in <code>ps</code> changes from bash to hello, and execve returns into ld-linux's entry point, not into main.</p>`,
+    kpath:'load_elf_binary → begin_new_exec (exec_mmap · do_close_on_exec · flush_signal_handlers · __set_task_comm) → elf_map ×3 → load_elf_interp → arch_setup_additional_pages (vdso) → create_elf_tables → START_THREAD',
+    apply:s=>exec(s,pid,'hello',helloMM(0))},
+  {pid, mode:'k', nr:'syscalls 257 · 0 · 9 · 3 · 158 · 10 (ld.so)', call:['openat(AT_FDCWD, "/lib/x86_64-linux-gnu/libc.so.6", O_RDONLY|O_CLOEXEC) = 3','read(3, "\\177ELF\\2\\1\\1\\3\\0\\0\\0\\0\\0\\0\\0\\0\\3\\0>\\0\\1\\0\\0\\0"..., 832) = 832','mmap(NULL, 2170256, PROT_READ, MAP_PRIVATE|MAP_DENYWRITE, 3, 0) = 0x7f9b1e200000','close(3) = 0','arch_prctl(ARCH_SET_FS, 0x7f9b1e3b5740) = 0','mprotect(0x5600a7d4d000, 4096, PROT_READ) = 0'],
+    title:'The dynamic loader links in libc',
+    body:`<p>Now ld-linux runs in user mode, inside the hello process. It reads hello's dynamic section, sees it needs <code>libc.so.6</code>, looks it up in <code>/etc/ld.so.cache</code>, opens it and maps its segments with <code>mmap</code>. Then it closes the fd; the mapping keeps the file alive.</p>
+<p>libc's code pages are shared: every process on the machine using libc maps the same physical pages from the page cache, so your hello costs almost no extra RAM for it.</p>
+<p>The loader sets up thread-local storage and points the FS register at it with <code>arch_prctl</code> (that is how <code>errno</code> can be per-thread). It resolves the symbols hello uses, such as <code>printf</code> and <code>exit</code>, applies relocations, and with RELRO turns the patched tables read-only again with <code>mprotect</code>. Finally it jumps to hello's <code>_start</code>, which calls <code>__libc_start_main</code>, which calls your <code>main()</code>.</p>`,
+    std:["A dynamically linked program has its shared libraries mapped and relocated by the interpreter before main runs.","Every syscall shown here: library paths, sizes, the mmap/mprotect sequence and TLS setup depend on the glibc version and distribution. Static binaries skip this step."], kpath:'_dl_start → _dl_map_object(libc.so.6) → _dl_map_segments (mmap) → init_tls → _dl_relocate_object → _dl_start_user → _start → __libc_start_main → main',
+    apply:s=>{P(s,pid).mm=helloMM(1);}},
+  {pid, mode:'f', nr:'exception 14 · page fault', call:['#PF  read @ 0x5600a7d4c139 [hello .text] → filemap_fault() page-cache hit'], fault:true,
+    title:'main() runs; pages arrive on demand',
+    body:`<p>Usually, the first time the CPU fetches an instruction from a page of hello's <code>.text</code>, there is no page-table entry for it yet, only the memory area in the map. The MMU raises a page fault (exception 14) and the CPU switches to kernel mode.</p>
+<p>The kernel looks up the faulting address in the process's memory areas, finds it belongs to the hello file, finds that page in the page cache (you just compiled it, so it is in RAM), maps it read-only and executable, and restarts the instruction. If the page were not cached, the kernel would start disk I/O and hello would sleep in state D until it arrived.</p>
+<p>This is demand paging, the normal behavior for file-backed code. It has exceptions: on a fault the kernel often also maps neighbouring pages already in the page cache (fault-around), so later accesses to them never fault; <code>MAP_POPULATE</code>, <code>mlock</code> and some loaders map pages up front; and pages other processes use are often already in RAM. So a process roughly brings in the pages it touches, plus some neighbours. libc.so.6 is about 2&nbsp;MB, and most of it is never mapped for this process.</p>`,
+    std:["Touching a valid mapping whose page is not mapped yet causes a page fault, which the kernel resolves without the program noticing.","Which accesses fault at all (fault-around, prefaulting, pages already resident) and whether the data comes from the page cache or disk."], kpath:'asm_exc_page_fault → do_user_addr_fault → find_vma → handle_mm_fault → do_fault → filemap_fault → finish_fault (set PTE) → iret',
+    apply:s=>{}},
+  ];
+}
+function stepExecShort(pid){
+  return {pid, mode:'k', nr:'syscall 59 · execve + ld.so', call:[`execve("./hello", ["./hello"], ${ENV}) = 0`,'openat(AT_FDCWD, "/lib/x86_64-linux-gnu/libc.so.6", O_RDONLY|O_CLOEXEC) = 3','mmap(NULL, 2170256, PROT_READ, MAP_PRIVATE|MAP_DENYWRITE, 3, 0) = 0x7f9b1e200000','close(3) = 0'],
+    title:'execve("./hello") in the first child',
+    body:`<p>The same execve sequence as a plain <code>./hello</code> run (run that one to see each stage separately): ELF header checked, old address space dropped, hello and ld-linux mapped, a new stack built, libc linked in, fd 255 closed by <code>O_CLOEXEC</code>.</p>
+<p>The important part here: descriptors you rewired before execve <b>survive</b> it. hello's fd 1 is still the pipe's write end, and hello has no idea.</p>`,
+    kpath:'do_execveat_common → load_elf_binary → begin_new_exec → … → ld.so → main',
+    apply:s=>exec(s,pid,'hello',helloMM(1))};
+}
+
+/* ---------- scenarios ---------- */
+function scHello(){
+  return [
+    stepParse('hello'),
+    stepFork(A),
+    {pid:A, mode:'u', nr:'returning to user space · twice', call:['    fork() = 4187 in parent · fork() = 0 in child'], logSkip:true,
+      title:'fork() returns twice',
+      body:`<p>The child starts its life inside the same <code>fork()</code> call as its parent, at the same instruction, with the same registers. The one difference: the kernel set the child's return register (<code>rax</code>) to 0. That value is the only way the code can tell which copy it is.</p>
+<div class="hex">pid_t pid = fork();
+if (pid == 0) { /* child: 4187 runs this */  execve(...); }
+else          { /* parent: bash runs this */  wait4(pid, ...); }</div>
+<p>Both sides call <code>setpgid(4187, 4187)</code> so the child leads its own process group (a job), and bash gives that group the terminal with <code>tcsetpgrp</code>. That is why Ctrl-C would reach hello and not your shell. Both processes are runnable now; on a multi-core machine they truly run at once.</p>`,
+      kpath:'ret_from_fork → syscall_exit_to_user_mode (child, rax=0) · syscall return path (parent, rax=4187)',
+      apply:s=>{}},
+    stepWait(),
+    {pid:A, mode:'f', nr:'exception 14 · page fault (write)', call:['#PF write @ 0x7ffd3a1ff8c8 [stack] → do_wp_page() copies 4 KiB'], fault:true,
+      title:'Copy-on-write in action',
+      body:`<p>The child keeps running bash code: it resets inherited signal handlers and builds the argv array for execve. Calling functions pushes return addresses onto the stack, which is a write. That page is marked read-only since the fork, so the CPU raises a page fault.</p>
+<p>The kernel sees a COW page with two owners. It allocates a fresh 4&nbsp;KiB frame, copies the old contents, maps the copy writable in the child only, and restarts the instruction. The child never notices. Only pages that are actually written get copied: a handful here, and they are about to be thrown away by execve anyway.</p>`,
+      std:["After fork, a write to a private page gives the writer its own copy. The other process never sees the change.","Which pages the child writes before execve, huge pages, and kernel optimizations such as reusing a page once the other owner has let go."], kpath:'do_user_addr_fault → handle_mm_fault → do_wp_page → wp_page_copy → alloc_page + copy_user_highpage → set_pte (writable)',
+      apply:s=>{const g=P(s,A).mm.find(x=>x.k==='stack');g.copied=true;delete g.cow;}},
+    ...stepExecFull(A),
+    {pid:A, mode:'k', nr:'syscalls 262 · 12 (stdio setup)', call:['newfstatat(1, "", {st_mode=S_IFCHR|0620, st_rdev=makedev(0x88, 0x0), ...}, AT_EMPTY_PATH) = 0','brk(NULL) = 0x5600a8f1c000','brk(0x5600a8f3d000) = 0x5600a8f3d000'],
+      title:'printf() first checks what stdout is',
+      body:`<p>This is what glibc typically does on the first output to stdout. Other C libraries, static builds, or a program that already used stdout may skip parts of it. <code>printf</code> doesn't write right away. On first use, glibc's stdio asks the kernel what fd 1 is with <code>fstat</code>. The answer is <code>S_IFCHR</code>, a character device, which means a terminal. For a terminal, stdio uses <b>line buffering</b>: output is flushed at every newline.</p>
+<p>stdio needs a buffer, so it calls <code>malloc</code>. This process has no heap yet, so malloc creates one with <code>brk()</code>. If the heap already had room, or malloc chose <code>mmap</code>, you would see no brk at all. The <code>[heap]</code> row appears in the memory map right above <code>.bss</code>. <code>"hello\\n"</code> is copied from <code>.rodata</code> into that buffer, and the newline triggers a flush.</p>`,
+      std:["ISO C: stdout is fully buffered only when it is known not to be an interactive device. glibc line-buffers terminals.","How the library detects a terminal, the buffer size, and whether malloc uses brk, mmap or existing heap space."], kpath:'printf → vfprintf → _IO_file_doallocate → fstat(1) → malloc → sbrk → brk syscall → do_brk_flags (new VMA)',
+      apply:s=>{P(s,A).mm=helloMM(2);}},
+    {pid:A, mode:'k', nr:'syscall 1 · write', call:['write(1, "hello\\n", 6) = 6'], out:'hello\n',
+      title:'write(): the bytes reach your terminal',
+      body:`<p>fd 1 is just an index into hello's descriptor table. Entry 1 points at the open file for <code>/dev/pts/0</code>, whose file operations belong to the tty layer. The kernel copies 6 bytes from hello's memory, runs them through the line discipline (which turns <code>\\n</code> into <code>\\r\\n</code>), and pushes them into the pty master.</p>
+<p>Your terminal emulator is reading the master side. It receives the bytes and draws <b>hello</b> on the left.</p>`,
+      std:["write(1, …) sends the bytes to whatever fd 1 refers to. The program does not need to know what that is.","The driver path and line-discipline processing (such as \\n → \\r\\n) depend on terminal settings."], kpath:'ksys_write → vfs_write → tty_write → n_tty_write (OPOST/ONLCR) → pty_write → master side wakes the terminal emulator',
+      apply:s=>{}},
+    {pid:A, mode:'k', nr:'syscall 231 · exit_group', call:['exit_group(0) = ?','+++ exited with 0 +++'],
+      title:'exit(): the process dies, but not completely',
+      body:`<p>Returning from main starts normal C program termination: the runtime calls <code>exit(0)</code>, which runs functions registered with <code>atexit</code>, flushes and closes stdio streams (nothing left to flush here), and finally ends the process. With glibc on Linux that last call is <code>exit_group</code>. The internal calls differ between libc versions. What is guaranteed is the order: handlers and flushing first, then the process ends.</p>
+<p><code>do_exit</code> releases everything the process owns: the address space is torn down, every descriptor is closed (the terminal loses 3 references), timers and signals are cleaned up. What remains is a <b>zombie</b>, state Z: just the task_struct, kept so the parent can collect the exit status and resource usage.</p>
+<p>The kernel sends <code>SIGCHLD</code> to the parent and wakes it from <code>wait4</code>.</p>`,
+      std:["After the process ends, its memory and descriptors are released and it stays a zombie until its parent waits for it. By default the parent receives SIGCHLD.","The libc steps between main and exit_group, and the kernel function names."], kpath:'do_group_exit → do_exit → exit_mm · exit_files · exit_fs · exit_notify (EXIT_ZOMBIE, do_notify_parent → SIGCHLD, __wake_up_parent)',
+      apply:s=>{die(s,A);setSt(s,BASH,'R');}},
+    {pid:BASH, mode:'k', nr:'syscall 61 · wait4 returns', call:['wait4(-1, [{WIFEXITED(s) && WEXITSTATUS(s) == 0}], WSTOPPED|WCONTINUED, NULL) = 4187','--- SIGCHLD {si_signo=SIGCHLD, si_code=CLD_EXITED, si_pid=4187, si_status=0} ---'],
+      title:'bash reaps the zombie and prints a prompt',
+      body:`<p>bash wakes in <code>wait4</code> and finds the zombie. The kernel copies out the exit status, <code>release_task</code> frees the task_struct and PID 4187 goes back to the pool. This is reaping. A parent that never waits leaves zombies in the table forever, which is what your <code>zombie.c</code> lab shows.</p>
+<p>bash stores the status in <code>$?</code> (0), takes the terminal back with <code>tcsetpgrp</code>, prints the prompt, and goes back to sleep in <code>read(0)</code>. On typical hardware this whole sequence takes around a millisecond, but that varies widely with the machine, its load and the binary.</p>`,
+      std:["Waiting collects the child's exit status and removes the zombie.","Whether the shell waits in a blocking call or from a SIGCHLD handler."], kpath:'do_wait → wait_task_zombie → put status to user → release_task → free_pid → put_task_struct',
+      apply:s=>{reap(s,A);setSt(s,BASH,'R');}},
+  ];
+}
+
+function scPipe(){
+  const mkpipe = s => { s.files.pr={kind:'pipe-r',label:'pipe:[81723] read end',sub:'O_RDONLY'}; s.files.pw={kind:'pipe-w',label:'pipe:[81723] write end',sub:'O_WRONLY'}; s.pipe={buf:''}; const b=P(s,BASH); b.fds[3]={f:'pr'}; b.fds[4]={f:'pw'}; };
+  return [
+    stepParse('pipe'),
+    {pid:BASH, mode:'k', nr:'syscall 22 · pipe', call:['pipe([3, 4]) = 0'],
+      title:'pipe(): a kernel buffer with two ends',
+      body:`<p><code>pipe()</code> creates a pipe inode on the internal <code>pipefs</code> filesystem (nothing on disk) with a ring of 16 page-sized slots, 64&nbsp;KiB in total. It also creates two open file objects, one opened for reading and one for writing, and installs them at the lowest free descriptor numbers: <b>3 is the read end, 4 is the write end</b>.</p>
+<p>Bytes written to 4 come out of 3, in order, exactly once. Right now bash holds both ends. The trick of a pipeline is entirely in how those ends get handed out and closed.</p>`,
+      std:["pipe() returns two descriptors, read end first, at the lowest free numbers. Data comes out in the order written, and reads see EOF only when every write end is closed.","Capacity (64 KiB by default on Linux, adjustable with F_SETPIPE_SZ) and whether the shell calls pipe or pipe2."], kpath:'do_pipe2 → create_pipe_files → get_pipe_inode → alloc_pipe_info (16 × pipe_buffer) → alloc_file_pseudo ×2 → fd_install(3), fd_install(4)',
+      apply:mkpipe},
+    stepFork(A,'Both pipe ends are now held twice: once by bash, once by the child. Watch the refcounts in the open-file list.'),
+    {pid:A, mode:'k', nr:'syscalls 33 · 3 · 3', call:['dup2(4, 1) = 1','close(3) = 0','close(4) = 0'],
+      title:'Child 1 plugs its stdout into the pipe',
+      body:`<p>Still running bash code, the child rewires its own table. <code>dup2(4, 1)</code> makes fd 1 point at the same open file as fd 4: the pipe's write end. The terminal loses a reference. Then the child closes 3 and 4, since it no longer needs them under those numbers.</p>
+<p>hello will call <code>write(1, …)</code> like any program, never knowing that 1 is now a pipe. That is the Unix design: programs talk to fds 0, 1 and 2, and whoever starts them decides what those are.</p>`,
+      kpath:'ksys_dup3 → do_dup2 (replace fdt->fd[1], fput old file) · close_fd ×2',
+      apply:s=>{setSt(s,A,'R');P(s,A).pgid=A;dup2(s,A,4,1);close(s,A,3,4);}},
+    {pid:BASH, mode:'k', nr:'syscall 3 · close', call:['close(4) = 0'],
+      title:'bash closes its copy of the write end',
+      body:`<p>This close is easy to miss and it is essential. A reader sees end-of-file only when <b>every</b> write end of the pipe is closed. If bash kept fd 4 open (or let the wc child inherit it), wc would wait for more input forever after hello exits, and your prompt would never return.</p>
+<p>Forgetting this close is the classic bug when you build pipelines yourself with <code>pipe()</code> and <code>fork()</code>.</p>`,
+      kpath:'close_fd → filp_close → fput (write end refcount 2 → 1)',
+      apply:s=>close(s,BASH,4)},
+    {...stepFork(B,'This child inherits 0, 1, 2, 255 and 3 (the read end). It does not get fd 4, because bash already closed it. It joins process group 4187, so the whole pipeline is one job and Ctrl-C reaches both.'), title:'Second fork, for wc', apply:s=>{fork(s,BASH,B);P(s,B).pgid=A;}},
+    {pid:B, mode:'k', nr:'syscalls 33 · 3', call:['dup2(3, 0) = 0','close(3) = 0'],
+      title:'Child 2 plugs its stdin into the pipe',
+      body:`<p>The wc child points fd 0 at the pipe's read end and closes 3. Its stdout stays on the terminal, so wc's answer will appear on your screen.</p>
+<p>Look at the descriptor tables now: data can only flow one way, from 4187's fd 1, through the kernel buffer, into 4188's fd 0.</p>`,
+      kpath:'do_dup2 (fdt->fd[0] = read end, fput tty) · close_fd',
+      apply:s=>{dup2(s,B,3,0);close(s,B,3);}},
+    stepWait(['close(3) = 0']),
+    stepExecShort(A),
+    {pid:B, mode:'k', nr:'syscall 59 · execve', call:[`execve("/usr/bin/wc", ["wc"], ${ENV}) = 0`],
+      title:'execve("/usr/bin/wc") in the second child',
+      body:`<p>The second child becomes wc, with its own fresh address space built from <code>/usr/bin/wc</code>. Notice that 4187 and 4188 now have completely separate memory maps. Nothing one does to its memory can affect the other. The only channel between them is the pipe, which lives in kernel memory.</p>
+<p>Both share one physical copy of libc's code, though: same file, same page cache pages, mapped into two address spaces.</p>`,
+      kpath:'do_execveat_common → load_elf_binary(/usr/bin/wc) → begin_new_exec → ld.so maps libc → main',
+      apply:s=>exec(s,B,'wc',wcMM())},
+    {pid:B, mode:'k', nr:'syscall 0 · read (blocks)', call:['read(0,  <unfinished ...>'],
+      title:'wc blocks on an empty pipe',
+      body:`<p>wc reads stdin. The pipe is empty, but a writer still exists (write end refcount 1), so the kernel cannot return 0: zero would mean end-of-file. Instead it puts wc to sleep on the pipe's read wait queue. wc is now in state <b>S</b>.</p>
+<p>It will wake when data arrives or when the last writer disappears. The two processes race, and this could just as well happen after hello writes. The pipe makes the result the same either way.</p>`,
+      kpath:'ksys_read → vfs_read → pipe_read → (pipe empty, writers > 0) → wait_event_interruptible_exclusive(pipe->rd_wait)',
+      apply:s=>setSt(s,B,'S','pipe_read · pipe empty, writers exist')},
+    {pid:A, mode:'k', nr:'syscalls 262 · 12 (stdio setup)', call:['newfstatat(1, "", {st_mode=S_IFIFO|0600, st_size=0, ...}, AT_EMPTY_PATH) = 0','brk(NULL) = 0x5600a8f1c000','brk(0x5600a8f3d000) = 0x5600a8f3d000'],
+      title:'printf() sees a pipe, and holds the output',
+      body:`<p>glibc's stdio asks what fd 1 is (the same glibc-specific sequence as before). This time the answer is <code>S_IFIFO</code>: a pipe. For anything that is not a terminal, stdio uses <b>full buffering</b>, here with a 4&nbsp;KiB buffer sized from <code>st_blksize</code>. Nothing is written until the buffer fills, <code>fflush</code> is called, or the program exits.</p>
+<p>So <code>"hello\\n"</code> lands in the heap buffer and printf returns without any write syscall. This is why output can look out of order when you pipe a program or redirect it to a file: its stdout stopped being line-buffered.</p>`,
+      std:["Output to a pipe is fully buffered: it is held until the buffer fills, fflush runs, or the program exits normally.","The detection method and buffer size are glibc details."], kpath:'_IO_file_doallocate → fstat(1): S_ISFIFO → no _IO_LINE_BUF → malloc(st_blksize=4096) → brk',
+      apply:s=>{P(s,A).mm=helloMM(2);}},
+    {pid:A, mode:'k', nr:'syscall 1 · write', call:['write(1, "hello\\n", 6) = 6'],
+      title:'exit() flushes the buffer into the pipe',
+      body:`<p><code>main</code> returns 0, <code>exit()</code> flushes stdio, and only now does <code>write(1, …)</code> happen. The kernel follows fd 1 to the pipe's write end, copies the 6 bytes into the first slot of the ring, and wakes every reader sleeping on the pipe. wc goes from S back to R.</p>
+<p>Note that the bytes went from hello's heap into kernel memory. They are not on screen and not in wc yet.</p>`,
+      kpath:'vfs_write → pipe_write → copy_page_from_iter into pipe->bufs[head] → wake_up_interruptible_sync_poll(&pipe->rd_wait)',
+      apply:s=>{s.pipe.buf='hello\n';setSt(s,B,'R','woken: data in pipe');}},
+    {pid:A, mode:'k', nr:'syscall 231 · exit_group', call:['exit_group(0) = ?','+++ exited with 0 +++'],
+      title:'hello exits and the last writer is gone',
+      body:`<p><code>do_exit</code> closes hello's descriptors. Closing fd 1 drops the write end's refcount to <b>0</b>, so the pipe now has no writers. The kernel records that and wakes the readers again so they can notice.</p>
+<p>hello becomes a zombie and bash gets <code>SIGCHLD</code>. The data it wrote is still sitting in the pipe: a pipe's contents outlive the writer.</p>`,
+      kpath:'do_exit → exit_files → fput(write end) → pipe_release → pipe->writers-- → wake_up(rd_wait)',
+      apply:s=>die(s,A)},
+    {pid:B, mode:'k', nr:'syscall 0 · read ×2', call:['read(0, "hello\\n", 16384) = 6','read(0, "", 16384) = 0'],
+      title:'wc reads the data, then EOF',
+      body:`<p>wc's read returns the 6 bytes and the pipe is empty again. wc counts: 1 newline, 1 word, 6 bytes. It reads again. The pipe is empty <em>and</em> has no writers, so read returns <b>0</b>. Zero bytes is how end-of-file looks in Unix; there is no special EOF character.</p>
+<p>This is the payoff for bash closing its copy of fd 4 earlier. With any writer still open, this second read would block forever.</p>`,
+      std:["read() returning 0 on a pipe means it is empty and has no writers left: end-of-file.","wc's read size (16384 here) and how many reads it makes."], kpath:'pipe_read → copy_page_to_iter → (empty && !pipe->writers) → return 0',
+      apply:s=>{s.pipe.buf='';}},
+    {pid:BASH, mode:'k', nr:'syscall 61 · wait4 returns', call:['wait4(-1, [{WIFEXITED(s) && WEXITSTATUS(s) == 0}], WSTOPPED|WCONTINUED, NULL) = 4187','wait4(-1,  <unfinished ...>'],
+      title:'bash reaps hello, keeps waiting for wc',
+      body:`<p>bash was woken by hello's SIGCHLD. It reaps the zombie (PID 4187 is released) and, because the job still has a running member, calls <code>wait4</code> again and goes back to sleep. The process group 4187 lives on as long as one member does.</p>`,
+      kpath:'do_wait → wait_task_zombie(4187) → release_task · do_wait again → schedule()',
+      apply:s=>{reap(s,A);setSt(s,BASH,'S','do_wait · waiting for wc');}},
+    {pid:B, mode:'k', nr:'syscall 1 · write', call:['write(1, "      1       1       6\\n", 24) = 24'], out:'      1       1       6\n',
+      title:'wc writes its answer to the terminal',
+      body:`<p>wc's fd 1 was never touched, so it is still <code>/dev/pts/0</code>. The result goes through the tty layer to your screen. When reading stdin, GNU wc pads each count to 7 columns: lines, words, bytes.</p>`,
+      kpath:'vfs_write → tty_write → n_tty_write → pty_write',
+      apply:s=>{}},
+    {pid:B, mode:'k', nr:'syscall 231 · exit_group', call:['exit_group(0) = ?','+++ exited with 0 +++'],
+      title:'wc exits and the pipe is freed',
+      body:`<p>wc exits. Closing fd 0 drops the last reference to the read end. With both ends gone, the kernel frees the pipe inode and its buffer pages. wc becomes a zombie and bash is woken.</p>`,
+      kpath:'do_exit → exit_files → fput(read end) → pipe_release → free_pipe_info',
+      apply:s=>{die(s,B);s.pipe=null;setSt(s,BASH,'R');}},
+    {pid:BASH, mode:'k', nr:'syscall 61 · wait4 returns', call:['wait4(-1, [{WIFEXITED(s) && WEXITSTATUS(s) == 0}], WSTOPPED|WCONTINUED, NULL) = 4188'],
+      title:'bash reaps wc; the job is done',
+      body:`<p>bash reaps wc and sets <code>$?</code> from the <em>last</em> command in the pipeline. <code>\${PIPESTATUS[@]}</code> keeps every member's status (<code>0 0</code> here). bash takes the terminal back and prints the prompt.</p>
+<p>Count what it took: 3 processes, 2 forks, 2 execs, 1 pipe, 6 bytes through kernel memory, and 3 reaps' worth of bookkeeping, typically a few milliseconds, depending on the system.</p>`,
+      kpath:'do_wait → wait_task_zombie(4188) → release_task',
+      apply:s=>{reap(s,B);setSt(s,BASH,'R');}},
+  ];
+}
+
+function scRedir(){
+  return [
+    stepParse('redir'),
+    stepFork(A),
+    stepWait(),
+    {pid:A, mode:'k', nr:'syscall 257 · openat', call:['openat(AT_FDCWD, "out.txt", O_WRONLY|O_CREAT|O_TRUNC, 0666) = 3'],
+      title:'The child opens out.txt',
+      body:`<p>This runs in the child, after fork and before execve. <code>O_CREAT</code> creates the file if it is missing, <code>O_TRUNC</code> empties it if it exists, which is why <code>&gt;</code> overwrites. The mode 0666 is filtered by the umask (usually 022), giving <code>-rw-r--r--</code>.</p>
+<p>The kernel creates a new open file object with its own offset, starting at 0, and installs it at the lowest free descriptor: 3.</p>`,
+      kpath:'do_sys_openat2 → path_openat → lookup_open (create inode) → do_truncate → alloc_file → fd_install(3)',
+      apply:s=>{setSt(s,A,'R');s.files.out={kind:'reg',label:'out.txt',sub:'O_WRONLY · offset 0'};P(s,A).fds[3]={f:'out'};}},
+    {pid:A, mode:'k', nr:'syscalls 33 · 3', call:['dup2(3, 1) = 1','close(3) = 0'],
+      title:'stdout now means out.txt',
+      body:`<p><code>dup2(3, 1)</code> points fd 1 at the out.txt file object and drops the child's terminal reference on fd 1. Closing 3 leaves exactly one way to reach the file: fd 1. bash's own table is untouched; your shell still writes to the terminal.</p>`,
+      kpath:'do_dup2 → rcu_assign_pointer(fdt->fd[1], file) → filp_close(old tty file ref)',
+      apply:s=>{dup2(s,A,3,1);close(s,A,3);}},
+    stepExecShort(A),
+    {pid:A, mode:'k', nr:'syscalls 262 · 12', call:['newfstatat(1, "", {st_mode=S_IFREG|0644, st_size=0, st_blksize=4096, ...}, AT_EMPTY_PATH) = 0','brk(NULL) = 0x5600a8f1c000','brk(0x5600a8f3d000) = 0x5600a8f3d000'],
+      title:'printf() sees a regular file',
+      body:`<p>fstat says <code>S_IFREG</code>, a regular file. Like a pipe, that means full buffering, sized by <code>st_blksize</code> (4096). <code>"hello\\n"</code> waits in the heap buffer.</p>`,
+      kpath:'_IO_file_doallocate → fstat → malloc(4096) → brk',
+      apply:s=>{P(s,A).mm=helloMM(2);}},
+    {pid:A, mode:'k', nr:'syscall 1 · write', call:['write(1, "hello\\n", 6) = 6'],
+      title:'exit() flushes into the page cache',
+      body:`<p>On exit, stdio flushes. The kernel follows fd 1 to the out.txt open file, copies the 6 bytes into a page of the file's <b>page cache</b>, advances the offset to 6, updates the file size, and marks the page dirty.</p>
+<p>write returns before anything touches the disk. A kernel writeback thread flushes dirty pages later, typically within 30 seconds, or right away if someone calls <code>fsync</code>.</p>`,
+      kpath:'vfs_write → ext4_file_write_iter → generic_perform_write → copy into page cache folio → mark_buffer_dirty',
+      apply:s=>{s.files.out.sub='O_WRONLY · offset 6 · size 6 (dirty page)';}},
+    {pid:A, mode:'k', nr:'syscall 231 · exit_group', call:['exit_group(0) = ?','+++ exited with 0 +++'],
+      title:'hello exits',
+      body:`<p>Closing fd 1 drops the last reference to the out.txt open file object, so it is freed. The file itself and its cached page live on. hello becomes a zombie; bash gets SIGCHLD.</p>`,
+      kpath:'do_exit → exit_files → fput(out.txt) → __fput → ext4_release_file',
+      apply:s=>{die(s,A);setSt(s,BASH,'R');}},
+    {pid:BASH, mode:'k', nr:'syscall 61 · wait4 returns', call:['wait4(-1, [{WIFEXITED(s) && WEXITSTATUS(s) == 0}], WSTOPPED|WCONTINUED, NULL) = 4187'],
+      title:'Reaped. Nothing on screen, by design',
+      body:`<p>bash reaps the child and prints the prompt. Your terminal shows nothing, because the only write went to out.txt. Run <code>cat out.txt</code> to read it back.</p>`,
+      kpath:'do_wait → wait_task_zombie → release_task',
+      apply:s=>{reap(s,A);setSt(s,BASH,'R');outFile=true;}},
+  ];
+}
+
+/* ---------- app state ---------- */
+let committed = [
+  '<span class="dim">Ubuntu 24.04 LTS · proclab container · bash 5.2</span>',
+  '<span class="dim">Type a command and press Enter, or tap one below. Then press → to step.</span>',
+  ''
+];
+let run = null;        // {cmd, steps, k}
+let outFile = false, timer = null, focusPid = null, prevRendered = null;
+const hist = []; let hIdx = 0;
+const $ = id => document.getElementById(id);
+
+function stateAt(k){
+  const s = initState();
+  if (!run) return s;
+  for (let i = 0; i <= k; i++) run.steps[i].apply(s);
+  return s;
+}
+
+/* ---------- terminal ---------- */
+function renderTerm(newOut){
+  const t = $('term');
+  let html = committed.join('\n');
+  const finished = !run || run.k >= run.steps.length - 1;
+  if (run){
+    html += (html?'\n':'') + PROMPT + esc(run.cmd);
+    let outs = '';
+    for (let i = 0; i <= run.k; i++) if (run.steps[i].out){
+      const o = esc(run.steps[i].out.replace(/\n$/,''));
+      outs += '\n' + (i === run.k && newOut ? `<span class="out-new">${o}</span>` : o);
+    }
+    html += outs;
+  }
+  if (finished){
+    html += (html?'\n':'') + PROMPT + '<input class="inline-in" id="cmd" autocomplete="off" autocapitalize="off" spellcheck="false" aria-label="command">';
+  } else {
+    html += '\n<span class="busy">running · step through on the right </span>';
+  }
+  const prevVal = $('cmd') ? $('cmd').value : '';
+  t.innerHTML = html;
+  const inp = $('cmd');
+  if (inp){ inp.value = prevVal; inp.addEventListener('keydown', onKey); }
+  t.scrollTop = t.scrollHeight;
+  document.querySelectorAll('.chip').forEach(c => c.disabled = !finished);
+}
+function commitRun(){
+  if (!run) return;
+  committed.push(PROMPT + esc(run.cmd));
+  run.steps.forEach(st => { if (st.out) committed.push(esc(st.out.replace(/\n$/,''))); });
+  run = null;
+}
+const SRC = '#include &lt;stdio.h&gt;\nint main(void){ printf("hello\\n"); return 0; }';
+function submit(raw){
+  const cmd = raw.trim().replace(/\s+/g,' ');
+  const norm = cmd.replace(/\s*\|\s*/,' | ').replace(/\s*>\s*/,' > ');
+  commitRun(); stopPlay();
+  if (cmd) { hist.push(cmd); } hIdx = hist.length;
+  let sc = null;
+  if (norm === './hello') sc = scHello();
+  else if (norm === './hello | wc') sc = scPipe();
+  else if (norm === './hello > out.txt') sc = scRedir();
+  if (sc){ run = {cmd: norm, steps: sc, k: 0}; focusPid = null; prevRendered = null; renderAll(true); return; }
+  // quick commands, no animation
+  const line = PROMPT + esc(cmd); const out = [];
+  if (!cmd) {}
+  else if (cmd === 'clear'){ committed = []; renderAll(); $('cmd') && $('cmd').focus(); return; }
+  else if (cmd === 'help') out.push('<span class="dim">animated:  ./hello   ./hello | wc   ./hello > out.txt\nother:     ls   cat hello.c   cat out.txt   clear</span>');
+  else if (cmd === 'ls') out.push('Makefile  anatomy  anatomy.c  exec  exec.c  fork  fork.c  <b style="color:var(--term-green)">hello</b>  hello.c' + (outFile?'  out.txt':'') + '  zombie  zombie.c');
+  else if (cmd === 'cat hello.c') out.push(SRC);
+  else if (cmd === 'cat out.txt') out.push(outFile ? 'hello' : 'cat: out.txt: No such file or directory');
+  else if (cmd === 'hello') out.push('hello: command not found\n<span class="dim">(no slash, so bash searched $PATH, and /lab is not in it. Use ./hello)</span>');
+  else out.push(`bash: ${esc(cmd.split(' ')[0])}: command not found\n<span class="dim">try ./hello, ./hello | wc or ./hello > out.txt (type help)</span>`);
+  committed.push(line, ...out);
+  renderAll(); $('cmd') && $('cmd').focus();
+}
+function onKey(e){
+  if (e.key === 'Enter'){ e.preventDefault(); submit(e.target.value); setTimeout(()=>{ if($('cmd'))$('cmd').focus(); },0); }
+  else if (e.key === 'ArrowUp'){ if (hIdx > 0){ hIdx--; e.target.value = hist[hIdx]; } e.preventDefault(); }
+  else if (e.key === 'ArrowDown'){ if (hIdx < hist.length){ hIdx++; e.target.value = hist[hIdx] || ''; } e.preventDefault(); }
+  else if (e.key === 'l' && e.ctrlKey){ e.preventDefault(); committed = []; renderTerm(); }
+}
+
+/* ---------- kernel view ---------- */
+const ST_WORD = {R:'R running', S:'S sleeping', Z:'Z zombie', X:'reaped'};
+function procSig(p){ return [p.state,p.comm,p.pgid,p.wchan].join('|'); }
+function renderProcs(s, prev, step){
+  const prevMap = prev ? Object.fromEntries(prev.procs.map(p=>[p.pid,p])) : {};
+  $('procs').innerHTML = s.procs.map(p => {
+    const old = prevMap[p.pid];
+    const cls = ['proc', p.state==='X'||p.state==='Z'?'dead':'', step&&step.pid===p.pid?'active':'', currentFocus(s,step)===p.pid?'focus':'', !old && prev ? 'enter flash' : (old && procSig(old)!==procSig(p) ? 'flash':'' )].join(' ');
+    const mmInfo = p.state==='Z'||p.state==='X' ? 'released' : p.mmOf ? `COW-shared with ${p.mmOf}` : (s.procs.some(q=>q.mmOf===p.pid&&live(q)) ? 'COW-shared with child' : 'private');
+    return `<button class="${cls}" data-pid="${p.pid}" aria-label="inspect ${p.comm} ${p.pid}">
+      <div class="row1"><span class="comm">${esc(p.comm)}</span><span class="st ${p.state}">${ST_WORD[p.state]}</span></div>
+      <div class="ids"><span>PID</span><span>${p.pid}</span><span>PPID</span><span>${p.ppid}</span><span>PGID</span><span>${p.pgid}</span><span>mm</span><span>${mmInfo}</span><span>fds</span><span>${Object.keys(p.fds).length}</span></div>
+      <div class="wchan">${esc(p.wchan)}</div></button>`;
+  }).join('');
+  $('procs').querySelectorAll('.proc').forEach(b => b.onclick = () => { focusPid = +b.dataset.pid; renderAll(); });
+}
+function currentFocus(s, step){
+  if (focusPid && s.procs.some(p=>p.pid===focusPid)) return focusPid;
+  return step ? step.pid : BASH;
+}
+function renderMM(s, prev, step){
+  const fp = currentFocus(s, step);
+  $('mmtabs').innerHTML = s.procs.map(p=>`<button class="tab ${p.pid===fp?'on':''}" data-pid="${p.pid}">${p.pid} ${esc(p.comm)}</button>`).join('');
+  $('mmtabs').querySelectorAll('.tab').forEach(b=>b.onclick=()=>{focusPid=+b.dataset.pid;renderAll();});
+  const p = P(s, fp);
+  const op = prev && P(prev, fp);
+  if (!p.mm.length){ $('mm').innerHTML = `<div class="empty">${p.state==='X'?'Process reaped. Nothing left.':'Address space released by do_exit. Only the task_struct remains (zombie).'}</div>`; return; }
+  const oldSig = op ? Object.fromEntries(op.mm.map(g=>[g.n, g.a+g.p+(g.cow?'c':'')+(g.copied?'p':'')])) : null;
+  const mmChanged = op && op.comm !== p.comm;
+  const grp = g => (g.k==='stack'||g.k==='vdso') ? 0 : g.k==='lib' ? 1 : 2;
+  const sharers = p.mmOf ? [p.mmOf] : s.procs.filter(q=>q.mmOf===p.pid&&live(q)).map(q=>q.pid);
+  let html = '<div class="as"><div class="band">0xffff800000000000 + · kernel space · mapped in every process, not accessible from ring 3</div><div class="gap">· · · 0x7fffffffffff top of user space · · ·</div>';
+  let lastG = 0;
+  p.mm.forEach(g => {
+    const gg = grp(g);
+    if (gg !== lastG){ html += `<div class="gap">· · · unmapped · · ·${gg===1?' mmap area':' '}</div>`; lastG = gg; }
+    const sig = g.a+g.p+(g.cow?'c':'')+(g.copied?'p':'');
+    const fl = oldSig && (mmChanged || oldSig[g.n] !== sig) ? (oldSig[g.n] ? 'flash' : 'enter flash') : '';
+    let badge = '';
+    if (g.cow) badge = `<span class="badge cow">copy-on-write · read-only PTEs, shared with ${sharers.join(', ')}</span>`;
+    if (g.copied) badge = `<span class="badge copied">page copied on write fault · rest still shared</span>`;
+    html += `<div class="seg ${g.cow?'cow':''} ${fl}"><span class="bar k-${g.k}"></span><span class="addr">${g.a}</span><span class="perm">${g.p}</span><span class="nm">${esc(g.n)}</span>${badge}</div>`;
+  });
+  html += '<div class="gap">· · · 0x0 null page, never mapped · · ·</div></div>';
+  $('mm').innerHTML = html;
+}
+function objHTML(s, fid){
+  const f = s.files[fid]; if (!f) return '';
+  return `<span class="obj"><span class="dot c-${f.kind}"></span>${esc(f.label)}</span>`;
+}
+function renderFDs(s, prev){
+  const prevFd = {};
+  if (prev) prev.procs.forEach(p=>{for(const fd in p.fds)prevFd[p.pid+':'+fd]=p.fds[fd].f;});
+  let html = '<div class="fdt">';
+  s.procs.forEach(p => {
+    const keys = Object.keys(p.fds).map(Number).sort((a,b)=>a-b);
+    html += `<div class="fdproc"><h4>${p.pid} ${esc(p.comm)} <span>· files_struct</span></h4><div class="fdrows">`;
+    if (!keys.length) html += `<div class="fdrow" style="color:var(--muted)">${p.state==='X'?'freed':'all closed by do_exit'}</div>`;
+    keys.forEach(fd => {
+      const e = p.fds[fd]; const k = p.pid+':'+fd;
+      const fl = prev && prevFd[k] !== e.f ? 'flash' : '';
+      html += `<div class="fdrow ${fl}"><span class="n">${fd}</span><span class="arr">→</span>${objHTML(s,e.f)}${e.cx?'<span class="cx" title="close-on-exec">CLOEXEC</span>':''}</div>`;
+    });
+    html += '</div></div>';
+  });
+  html += '</div><div class="ofile"><h4>Kernel open file objects · struct file</h4>';
+  Object.keys(s.files).forEach(fid => {
+    const f = s.files[fid], n = refs(s,fid);
+    const pn = prev && prev.files[fid] ? refs(prev,fid) : null;
+    if (n === 0 && !(pn > 0)) return;
+    const fl = prev && pn !== n ? 'flash' : '';
+    html += `<div class="of ${fl}"><span class="obj"><span class="dot c-${f.kind}"></span>${esc(f.label)} <span style="color:var(--muted)">${esc(f.sub)}</span></span><span class="refs">${n===0?'<b>freed</b>':`refs <b>${n}</b>`}</span></div>`;
+  });
+  if (s.pipe || (prev && prev.pipe)){
+    const pp = s.pipe || {buf:''};
+    const bytes = [...pp.buf].map(c=>`<span>${c==='\n'?'\\n':esc(c)}</span>`).join('');
+    const w = s.files.pw ? refs(s,'pw') : 0, r = s.files.pr ? refs(s,'pr') : 0;
+    const fl = prev && prev.pipe && prev.pipe.buf !== pp.buf ? 'flash' : (!prev || !prev.pipe ? 'enter' : '');
+    html += `<div class="pipebox ${fl}"><div class="lbl"><span>pipe_inode_info · 16 × 4 KiB ring</span><span>${s.pipe?`readers ${r} · writers ${w}`:'freed'}</span></div>
+      <div class="ringbuf">${Array.from({length:16},(_,i)=>`<div class="${i===0&&pp.buf?'full':''}"></div>`).join('')}</div>
+      <div class="pipebytes">${bytes || (s.pipe ? (w===0?'empty, no writers → read() returns 0 (EOF)':'empty → read() would block') : '')}</div></div>`;
+  }
+  html += '</div>';
+  $('fds').innerHTML = html;
+}
+function renderCPU(step, s){
+  const mode = step ? step.mode : 'u';
+  $('ring-u').className = 'ring' + (mode==='u' ? ' on u' : '');
+  $('ring-k').className = 'ring' + (mode==='k' ? ' on k' : mode==='f' ? ' on f' : '');
+  if (!step){
+    $('cpu-who').innerHTML = 'idle · bash <b>4120</b> asleep in read(0)';
+    $('cpu-what').textContent = 'read(0,  <unfinished ...>';
+    $('cpu-nr').textContent = 'waiting for a keystroke from /dev/pts/0';
+    return;
+  }
+  const p = P(s, step.pid);
+  $('cpu-who').innerHTML = `running <b>${step.pid} ${esc(p?p.comm:'')}</b>${step.mode==='f'?' · trapped by the MMU':''}`;
+  $('cpu-what').textContent = step.call[0].trim();
+  $('cpu-nr').textContent = step.nr;
+}
+function renderExplain(step){
+  if (!step){
+    $('explain').innerHTML = `<div class="eyebrow"><span class="tag user">idle</span></div>
+      <h3>bash is waiting for you</h3>
+      <p>Right now there is one process that matters: your shell, PID 4120. It is asleep in <code>read()</code> on fd 0, the terminal, so it uses no CPU. On the right you can see its task_struct, its virtual address space (the regions in <code>/proc/4120/maps</code>) and its descriptor table, where fds 0, 1, 2 and 255 all point at one terminal.</p>
+      <p>Type <code>./hello</code> and press Enter. Every step shows the exact syscall as <code>strace -f</code> would print it, what the kernel did, and the kernel functions involved. Then try <code>./hello | wc</code> to see a pipe, and <code>./hello &gt; out.txt</code> to see a redirection.</p>
+      <div class="kpath"><b>Source</b>hello.c: int main(void){ printf("hello\\n"); return 0; }</div>`;
+    return;
+  }
+  const tag = step.mode==='u' ? '<span class="tag user">user mode</span>' : step.mode==='f' ? '<span class="tag fault">page fault</span>' : '<span class="tag kernel">kernel · syscall</span>';
+  $('explain').innerHTML = `<div class="eyebrow">${tag}<span>PID ${step.pid}</span><span>· step ${run.k+1} of ${run.steps.length}</span></div>
+    <h3>${step.title}</h3>
+    <div class="call">${step.call.map(esc).join('\n')}</div>
+    ${step.body}
+    ${step.std ? `<div class="facts"><div><b class="g">Guaranteed</b>${esc(step.std[0])}</div><div><b class="v">Varies</b>${esc(step.std[1])}</div></div>` : ""}
+    <div class="kpath"><b>Kernel path</b>simplified, Linux 6.x · ${esc(step.kpath)}</div>`;
+}
+function renderLog(){
+  if (!run){ $('log').innerHTML = '<button class="cur"><span class="pid">[pid  4120]</span> read(0,  &lt;unfinished ...&gt;</button>'; return; }
+  let html = '';
+  for (let i = 0; i <= run.k; i++){
+    const st = run.steps[i];
+    st.call.forEach((c, j) => {
+      if (st.logSkip) return;
+      html += `<button data-k="${i}" class="${i===run.k?'cur':''} ${st.fault?'ft':''}"><span class="pid">[pid ${String(st.pid).padStart(5)}]</span> ${esc(c)}</button>`;
+    });
+    if (st.logSkip && i===run.k) html += `<button data-k="${i}" class="cur"><span class="pid">[pid ${String(st.pid).padStart(5)}]</span> ${esc(st.call[0].trim())}</button>`;
+  }
+  $('log').innerHTML = html;
+  $('log').querySelectorAll('button[data-k]').forEach(b=>b.onclick=()=>{stopPlay();go(+b.dataset.k);});
+  const cur = $('log').querySelector('.cur:last-of-type') || $('log').lastElementChild;
+  if (cur) $('log').scrollTop = $('log').scrollHeight;
+}
+function renderControls(){
+  const has = !!run, k = has ? run.k : 0, n = has ? run.steps.length : 1;
+  $('prev').disabled = !has || k === 0;
+  $('next').disabled = !has || k >= n-1;
+  $('skip').disabled = !has || k >= n-1;
+  $('play').disabled = !has || k >= n-1;
+  $('play').textContent = timer ? 'Pause' : 'Play';
+  $('stepno').textContent = has ? `${run.cmd} · step ${k+1}/${n}` : 'idle · type a command';
+  $('bar').style.width = has ? ((k+1)/n*100)+'%' : '0%';
+}
+function renderAll(newOut){
+  const step = run ? run.steps[run.k] : null;
+  const s = stateAt(run ? run.k : -1);
+  const prev = run && run.k > 0 ? stateAt(run.k-1) : (run ? initState() : null);
+  renderTerm(newOut);
+  renderCPU(step, s);
+  renderProcs(s, prev, step);
+  renderMM(s, prev, step);
+  renderFDs(s, prev);
+  renderExplain(step);
+  renderLog();
+  renderControls();
+}
+function go(k){
+  if (!run) return;
+  const fwd = k > run.k;
+  run.k = Math.max(0, Math.min(run.steps.length-1, k));
+  focusPid = null;
+  renderAll(fwd);
+  if (run.k >= run.steps.length-1){ stopPlay(); setTimeout(()=>$('cmd')&&$('cmd').focus({preventScroll:true}),0); }
+}
+function stopPlay(){ if (timer){ clearTimeout(timer); timer = null; } renderControls(); }
+function tick(){ if (!run || run.k >= run.steps.length-1){ stopPlay(); return; } go(run.k+1); if (run && run.k < run.steps.length-1) timer = setTimeout(tick, +$('speed').value); else stopPlay(); }
+function togglePlay(){ if (timer) stopPlay(); else if (run && run.k < run.steps.length-1){ timer = setTimeout(tick, 400); renderControls(); } }
+
+$('prev').onclick = () => { stopPlay(); go(run.k-1); };
+$('next').onclick = () => { stopPlay(); go(run.k+1); };
+$('skip').onclick = () => { stopPlay(); go(run.steps.length-1); };
+$('play').onclick = togglePlay;
+$('term').addEventListener('click', () => { const i = $('cmd'); if (i && !window.getSelection().toString()) i.focus({preventScroll:true}); });
+document.querySelectorAll('.chip').forEach(c => c.onclick = () => { if (!c.disabled){ submit(c.dataset.cmd); } });
+document.addEventListener('keydown', e => {
+  const inInput = e.target && e.target.id === 'cmd';
+  if (inInput && e.target.value !== '') return;
+  if (e.target && (e.target.tagName === 'SELECT')) return;
+  if (!run) return;
+  if (e.key === 'ArrowRight' || (!inInput && e.key === 'n')){ e.preventDefault(); stopPlay(); go(run.k+1); }
+  else if (e.key === 'ArrowLeft' || (!inInput && e.key === 'p')){ e.preventDefault(); stopPlay(); go(run.k-1); }
+  else if (e.key === ' ' && !inInput && e.target.tagName !== 'BUTTON'){ e.preventDefault(); togglePlay(); }
+});
+renderAll();
+})();
+</script>
+</body>
+</html>

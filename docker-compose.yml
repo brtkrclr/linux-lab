@@ -1,0 +1,18 @@
+# Linux processes & threads lab.
+#   docker compose up -d --build     start (first run builds the image with the tools)
+#   docker compose exec proclab bash enter the lab
+#   docker compose down              stop and remove the container (your files in ./ stay)
+services:
+  proclab:
+    build: .
+    image: proclab:latest
+    container_name: proclab
+    hostname: proclab
+    privileged: true          # needed for strace/gdb ptrace, namespaces and cgroups modules
+    init: false               # keep PID 1 = sleep infinity: it never reaps zombies (intentional lesson)
+    command: ["sleep", "infinity"]
+    working_dir: /lab
+    volumes:
+      - ./:/lab
+    stdin_open: true
+    tty: true
